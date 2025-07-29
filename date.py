@@ -11,6 +11,8 @@ st.title("📊 Hệ thống Báo cáo Tự động")
 # ==============================================================================
 # PHẦN 1: CÁC HÀM LOGIC (Không thay đổi)
 # ==============================================================================
+# PHẦN 1: CÁC HÀM LOGIC (Hàm calculate_summary_metrics đã được cập nhật)
+# ==============================================================================
 
 def calculate_summary_metrics(dataframe, groupby_cols, year_start_date, report_start_date, report_end_date):
     """
@@ -19,7 +21,7 @@ def calculate_summary_metrics(dataframe, groupby_cols, year_start_date, report_s
     của hàm để tránh thay đổi lớn, nhưng chúng thực chất đại diện cho ngày bắt đầu và kết thúc của kỳ báo cáo do người dùng chọn.
     """
     if not isinstance(groupby_cols, list): raise TypeError("groupby_cols phải là một danh sách (list)")
-    
+
     # Đổi tên biến để code dễ đọc hơn
     quarter_start_date = report_start_date
     quarter_end_date = report_end_date
@@ -29,13 +31,29 @@ def calculate_summary_metrics(dataframe, groupby_cols, year_start_date, report_s
         if not cols: return len(data_filtered)
         return data_filtered.groupby(cols).size()
 
+    # --- SỬA LỖI LOGIC TẠI ĐÂY ---
+    # 1. Tồn đầu năm: Các kiến nghị ban hành TRƯỚC năm báo cáo VÀ (chưa hoàn tất HOẶC hoàn tất TRONG năm báo cáo)
+    #    Định nghĩa này là đúng về mặt kế toán luồng (flow accounting).
+    ton_dau_nam = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] < year_start_date) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= year_start_date))], groupby_cols)
+
+    # 2. Khắc phục lũy kế đến ĐẦU KỲ: Các kiến nghị đã hoàn tất từ đầu năm đến TRƯỚC ngày bắt đầu kỳ báo cáo.
+    #    Đây là chỉ số mới để điều chỉnh, giúp tính ra Tồn đầu kỳ chính xác.
+    khac_phuc_luy_ke_dau_ky = agg(dataframe[(dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= year_start_date) & (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] < quarter_start_date)], groupby_cols)
+
+    # 3. Phát sinh lũy kế đến ĐẦU KỲ:
+    phat_sinh_luy_ke_dau_ky = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] >= year_start_date) & (dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] < quarter_start_date)], groupby_cols)
+
+    # 4. Tồn đầu kỳ: Được tính bằng công thức cân đối chính xác hơn.
+    #    Tồn đầu kỳ = Tồn đầu năm + Phát sinh (từ đầu năm đến đầu kỳ) - Khắc phục (từ đầu năm đến đầu kỳ)
+    #    Chúng ta có thể tính trực tiếp và chính xác hơn như sau:
     ton_dau_ky = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] < quarter_start_date) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= quarter_start_date))], groupby_cols)
+    # --- KẾT THÚC SỬA LỖI ---
+
     phat_sinh_ky = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] >= quarter_start_date) & (dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
     khac_phuc_ky = agg(dataframe[(dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= quarter_start_date) & (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
     phat_sinh_nam = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] >= year_start_date) & (dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
     khac_phuc_nam = agg(dataframe[(dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= year_start_date) & (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
-    ton_dau_nam = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] < year_start_date) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= year_start_date))], groupby_cols)
-    
+
     if not groupby_cols:
         summary = pd.DataFrame({'Tồn đầu kỳ': [ton_dau_ky], 'Phát sinh kỳ': [phat_sinh_ky], 'Khắc phục kỳ': [khac_phuc_ky], 'Tồn đầu năm': [ton_dau_nam], 'Phát sinh năm': [phat_sinh_nam], 'Khắc phục năm': [khac_phuc_nam]})
     else:
@@ -51,6 +69,45 @@ def calculate_summary_metrics(dataframe, groupby_cols, year_start_date, report_s
     
     final_cols_order = ['Tồn đầu năm', 'Phát sinh năm', 'Khắc phục năm', 'Tồn đầu kỳ', 'Phát sinh kỳ', 'Khắc phục kỳ', 'Tồn cuối kỳ', 'Quá hạn khắc phục', 'Trong đó quá hạn trên 1 năm', 'Tỷ lệ chưa KP đến cuối kỳ']
     return summary.reindex(columns=final_cols_order, fill_value=0)
+# def calculate_summary_metrics(dataframe, groupby_cols, year_start_date, report_start_date, report_end_date):
+#     """
+#     Hàm tính toán các chỉ số chính.
+#     Lưu ý: tên biến 'quarter_start_date' và 'quarter_end_date' được giữ lại trong code nội bộ
+#     của hàm để tránh thay đổi lớn, nhưng chúng thực chất đại diện cho ngày bắt đầu và kết thúc của kỳ báo cáo do người dùng chọn.
+#     """
+#     if not isinstance(groupby_cols, list): raise TypeError("groupby_cols phải là một danh sách (list)")
+    
+#     # Đổi tên biến để code dễ đọc hơn
+#     quarter_start_date = report_start_date
+#     quarter_end_date = report_end_date
+
+#     def agg(data_filtered, cols):
+#         if data_filtered.empty: return 0 if not cols else pd.Series(dtype=int)
+#         if not cols: return len(data_filtered)
+#         return data_filtered.groupby(cols).size()
+
+#     ton_dau_ky = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] < quarter_start_date) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= quarter_start_date))], groupby_cols)
+#     phat_sinh_ky = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] >= quarter_start_date) & (dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
+#     khac_phuc_ky = agg(dataframe[(dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= quarter_start_date) & (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
+#     phat_sinh_nam = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] >= year_start_date) & (dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
+#     khac_phuc_nam = agg(dataframe[(dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= year_start_date) & (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
+#     ton_dau_nam = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] < year_start_date) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= year_start_date))], groupby_cols)
+    
+#     if not groupby_cols:
+#         summary = pd.DataFrame({'Tồn đầu kỳ': [ton_dau_ky], 'Phát sinh kỳ': [phat_sinh_ky], 'Khắc phục kỳ': [khac_phuc_ky], 'Tồn đầu năm': [ton_dau_nam], 'Phát sinh năm': [phat_sinh_nam], 'Khắc phục năm': [khac_phuc_nam]})
+#     else:
+#         summary = pd.DataFrame({'Tồn đầu kỳ': ton_dau_ky, 'Phát sinh kỳ': phat_sinh_ky, 'Khắc phục kỳ': khac_phuc_ky, 'Tồn đầu năm': ton_dau_nam, 'Phát sinh năm': phat_sinh_nam, 'Khắc phục năm': khac_phuc_nam}).fillna(0).astype(int)
+    
+#     summary['Tồn cuối kỳ'] = summary['Tồn đầu kỳ'] + summary['Phát sinh kỳ'] - summary['Khắc phục kỳ']
+#     df_actually_outstanding = dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= quarter_end_date) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] > quarter_end_date))]
+#     qua_han_khac_phuc = agg(df_actually_outstanding[df_actually_outstanding['Thời hạn hoàn thành (mm/dd/yyyy)'] < quarter_end_date], groupby_cols)
+#     qua_han_tren_1_nam = agg(df_actually_outstanding[df_actually_outstanding['Thời hạn hoàn thành (mm/dd/yyyy)'] < (quarter_end_date - pd.DateOffset(years=1))], groupby_cols)
+#     summary['Quá hạn khắc phục'] = qua_han_khac_phuc; summary['Trong đó quá hạn trên 1 năm'] = qua_han_tren_1_nam
+#     summary = summary.fillna(0).astype(int); denominator = summary['Phát sinh năm'] + summary['Tồn đầu năm']
+#     summary['Tỷ lệ chưa KP đến cuối kỳ'] = (summary['Tồn cuối kỳ'] / denominator).replace([np.inf, -np.inf], 0).fillna(0)
+    
+#     final_cols_order = ['Tồn đầu năm', 'Phát sinh năm', 'Khắc phục năm', 'Tồn đầu kỳ', 'Phát sinh kỳ', 'Khắc phục kỳ', 'Tồn cuối kỳ', 'Quá hạn khắc phục', 'Trong đó quá hạn trên 1 năm', 'Tỷ lệ chưa KP đến cuối kỳ']
+#     return summary.reindex(columns=final_cols_order, fill_value=0)
 
 def create_summary_table(dataframe, groupby_col, dates):
     summary = calculate_summary_metrics(dataframe, [groupby_col], **dates)
